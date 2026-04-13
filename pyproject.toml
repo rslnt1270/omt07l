@@ -1,0 +1,13 @@
+[project]
+name = "omt07l"
+version = "0.1.0"
+description = "Live coding audiovisual — Claude Code orquesta SuperCollider, Hydra y TouchDesigner"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["mcp/hydra"]
+
+[tool.uv]
+package = false

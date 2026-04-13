@@ -1,0 +1,92 @@
+# omt07l — Protocolo OSC canónico
+# FUENTE DE VERDAD. Cualquier cambio aquí debe reflejarse en:
+#   - sc/bus/osc_routes.scd            (quien emite)
+#   - mcp/hydra/src/hydra_mcp/ws_bridge.py  (quien traduce a ws)
+#   - mcp/hydra/web/client.js          (quien puebla window.omt)
+#   - docs/osc-protocol.md             (documentación)
+#   - TouchDesigner OSC In CHOP        (quien consume en TD)
+
+ports:
+  scsynth: 57110          # SC audio server
+  sclang: 57120           # SC language (lectura de OSC de control)
+  hydra_bridge_osc: 57200 # ws_bridge.py escucha aquí
+  hydra_bridge_ws: 8765   # WebSocket browser ↔ ws_bridge.py
+  touchdesigner_osc: 7000 # OSC In CHOP en TD
+
+destinations:
+  # SC envía a estos destinos tras procesar audio
+  - name: hydra_bridge
+    host: 127.0.0.1
+    port: 57200
+  - name: touchdesigner
+    host: 127.0.0.1
+    port: 7000
+
+addresses:
+
+  # ── Audio (origen: SuperCollider) ─────────────────────────────
+  - address: /omt/audio/pitch
+    args:
+      - { name: freq,    type: float, unit: hz,   range: [20, 2000] }
+      - { name: clarity, type: float, unit: norm, range: [0, 1] }
+    origin: sc
+    consumers: [hydra, touchdesigner]
+    source: "Tartini.kr(SoundIn.ar(0))"
+
+  - address: /omt/audio/rms/bass
+    args:
+      - { name: level, type: float, unit: norm, range: [0, 1] }
+    origin: sc
+    consumers: [hydra, touchdesigner]
+    source: "LPF(SoundIn.ar(0), 200) → Amplitude.kr"
+
+  - address: /omt/audio/rms/mid
+    args:
+      - { name: level, type: float, unit: norm, range: [0, 1] }
+    origin: sc
+    consumers: [hydra, touchdesigner]
+    source: "BPF(SoundIn.ar(0), 1000) → Amplitude.kr"
+
+  - address: /omt/audio/rms/high
+    args:
+      - { name: level, type: float, unit: norm, range: [0, 1] }
+    origin: sc
+    consumers: [hydra, touchdesigner]
+    source: "HPF(SoundIn.ar(0), 4000) → Amplitude.kr"
+
+  - address: /omt/audio/onset
+    args:
+      - { name: strength, type: float, unit: norm, range: [0, 1] }
+    origin: sc
+    consumers: [hydra, touchdesigner]
+    source: "Onsets.kr(FFT(...))"
+
+  - address: /omt/audio/fft/bands
+    args:
+      - { name: b0, type: float, range: [0, 1] }
+      - { name: b1, type: float, range: [0, 1] }
+      - { name: b2, type: float, range: [0, 1] }
+      - { name: b3, type: float, range: [0, 1] }
+      - { name: b4, type: float, range: [0, 1] }
+      - { name: b5, type: float, range: [0, 1] }
+      - { name: b6, type: float, range: [0, 1] }
+      - { name: b7, type: float, range: [0, 1] }
+    origin: sc
+    consumers: [hydra, touchdesigner]
+    source: "8 bandas logarítmicas del FFT"
+
+  # ── Control (origen: Claude / sub-agentes) ────────────────────
+  - address: /omt/control/scene
+    args:
+      - { name: name, type: string }
+    origin: claude
+    consumers: [sc, hydra, touchdesigner]
+    notes: "Disparado por el sub-agente conductor para cambiar escena"
+
+  - address: /omt/control/param
+    args:
+      - { name: key,   type: string }
+      - { name: value, type: float }
+    origin: claude
+    consumers: [sc, hydra, touchdesigner]
+    notes: "Parámetro arbitrario clave/valor para ajuste fino"

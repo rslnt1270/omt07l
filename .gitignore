@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv/
+uv.lock
+
+# SuperCollider
+*.scsyndef
+*.sclang_history
+
+# TouchDesigner
+*.toe.bak
+*.toeBackup/
+Backup/
+
+# Node
+node_modules/
+dist/
+
+# Editores / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Logs
+*.log
+
+# Claude Code (solo local, no compartir permisos por máquina)
+.claude/settings.local.json
+
+# R (entorno local)
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata

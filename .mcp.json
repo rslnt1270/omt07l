@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "supercollider": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${HOME}/src/SuperColliderMCP",
+        "mcp",
+        "run",
+        "server.py"
+      ],
+      "env": {}
+    },
+    "touchdesigner": {
+      "command": "npx",
+      "args": ["-y", "touchdesigner-mcp-server@latest", "--stdio"],
+      "env": {}
+    },
+    "hydra": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "mcp/hydra",
+        "hydra-mcp"
+      ],
+      "env": {}
+    }
+  }
+}

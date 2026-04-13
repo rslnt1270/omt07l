@@ -1,0 +1,113 @@
+# Paleta — porcelain_blue
+# Derivada del estudio en docs/studies/porcelain_blue.md
+# Figura de porcelana qinghua (azul y blanco de Jingdezhen).
+#
+# Cada color expone tres formatos:
+#   hex   — "#RRGGBB"
+#   rgb01 — [r,g,b] normalizado 0..1 (listo para Hydra/WebGL)
+#   rgb255— [r,g,b] 0..255 (listo para TD, CSS, etc.)
+#
+# Regla de uso: el hue dominante es 213–220°. No introducir negro ni blanco
+# puros ni tonos cálidos — romperían la coherencia de la referencia.
+
+name: porcelain_blue
+hue_range_deg: [213, 220]
+dominant_hue_deg: 215
+notes: |
+  Rango de modulación recomendado: cobalt_wash → cobalt_ink
+  (4 pasos de valor sobre el mismo hue).
+  Fondo porcelana_body inmutable — se modulan solo las capas de pintura y coral.
+
+tokens:
+
+  porcelain_highlight:
+    role: "Brillo especular del vidriado, punto más claro"
+    hex: "#F4F6F5"
+    rgb01: [0.957, 0.965, 0.961]
+    rgb255: [244, 246, 245]
+
+  porcelain_body:
+    role: "Blanco base del cuerpo cerámico"
+    hex: "#E6E8E7"
+    rgb01: [0.902, 0.910, 0.906]
+    rgb255: [230, 232, 231]
+
+  porcelain_shadow:
+    role: "Semitono frío del vidriado en sombra"
+    hex: "#C9D1D4"
+    rgb01: [0.788, 0.820, 0.831]
+    rgb255: [201, 209, 212]
+
+  mist_blue:
+    role: "Fondo ambiente / halo atmosférico"
+    hex: "#A8B6C2"
+    rgb01: [0.659, 0.714, 0.761]
+    rgb255: [168, 182, 194]
+
+  cobalt_wash:
+    role: "Aguada intermedia, ink-wash diluido"
+    hex: "#6D8AA8"
+    rgb01: [0.427, 0.541, 0.659]
+    rgb255: [109, 138, 168]
+
+  cobalt_mid:
+    role: "Cobalto medio, masa principal de las ramas"
+    hex: "#3E6596"
+    rgb01: [0.243, 0.396, 0.588]
+    rgb255: [62, 101, 150]
+
+  cobalt_deep:
+    role: "Cobalto profundo, trazos finales y acentos"
+    hex: "#1E3E78"
+    rgb01: [0.118, 0.243, 0.471]
+    rgb255: [30, 62, 120]
+
+  cobalt_ink:
+    role: "Casi-negro azul, contornos más finos y sombras duras"
+    hex: "#0E1F4A"
+    rgb01: [0.055, 0.122, 0.290]
+    rgb255: [14, 31, 74]
+
+  bg_cool_gray:
+    role: "Fondo neutro frío del entorno"
+    hex: "#8B96A0"
+    rgb01: [0.545, 0.588, 0.627]
+    rgb255: [139, 150, 160]
+
+# Rampas precomputadas — listas para `colorama` / LUTs / gradient maps.
+ramps:
+
+  cobalt:
+    description: "De tinta profunda a aguada clara. Úsalo con pitch/clarity."
+    stops:
+      - [0.055, 0.122, 0.290]  # cobalt_ink
+      - [0.118, 0.243, 0.471]  # cobalt_deep
+      - [0.243, 0.396, 0.588]  # cobalt_mid
+      - [0.427, 0.541, 0.659]  # cobalt_wash
+
+  porcelain:
+    description: "Rampa de luz del vidriado. Úsalo como base inmutable."
+    stops:
+      - [0.788, 0.820, 0.831]  # porcelain_shadow
+      - [0.902, 0.910, 0.906]  # porcelain_body
+      - [0.957, 0.965, 0.961]  # porcelain_highlight
+
+  full:
+    description: "Rampa completa — fondo → pintura → luz. Para gradient maps."
+    stops:
+      - [0.055, 0.122, 0.290]  # cobalt_ink
+      - [0.243, 0.396, 0.588]  # cobalt_mid
+      - [0.427, 0.541, 0.659]  # cobalt_wash
+      - [0.659, 0.714, 0.761]  # mist_blue
+      - [0.902, 0.910, 0.906]  # porcelain_body
+      - [0.957, 0.965, 0.961]  # porcelain_highlight
+
+# Mapeo sugerido al bus OSC de omt07l. El sketch real puede ignorarlo o
+# reinterpretarlo — está aquí como contrato por defecto.
+audio_mapping:
+  bass:    "Escala/densidad del fractal coral"
+  mid:     "Opacidad de la capa ink-wash"
+  high:    "Cantidad de microdetalle (pájaros, hojas)"
+  onset:   "Disparo de pinceladas instantáneas"
+  pitch:   "Posición en la rampa cobalt (grave=ink, agudo=wash)"
+  clarity: "Nitidez del vidriado vs. sangrado del ink-wash"
