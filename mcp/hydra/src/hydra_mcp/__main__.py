@@ -1,4 +1,11 @@
-"""Entrypoint: arranca ws_bridge en un thread y el MCP server en el principal."""
+"""Entrypoints de hydra-mcp.
+
+- `main()` / `hydra-mcp`: arranca el ws bridge en un thread y el MCP server
+  por stdio en el hilo principal. Es el entry point que usa Claude Code.
+- `bridge_only()` / `hydra-bridge`: arranca sólo el ws bridge en el hilo
+  principal con manejo nativo de SIGINT/SIGTERM. Útil para tests, CI y
+  debugging sin un cliente MCP.
+"""
 
 from __future__ import annotations
 
@@ -15,11 +22,12 @@ def main() -> None:
     t = threading.Thread(target=bridge.run_forever, name="hydra-ws-bridge", daemon=True)
     t.start()
 
-    # Exponer el bridge a las tools del MCP server
     mcp.state["bridge"] = bridge  # type: ignore[attr-defined]
-
-    # El MCP server corre en el hilo principal (stdio)
     mcp.run()
+
+
+def bridge_only() -> None:
+    Bridge(BridgeConfig()).run_forever(install_signal_handlers=True)
 
 
 if __name__ == "__main__":

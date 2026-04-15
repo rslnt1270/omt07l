@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,12 +64,27 @@ class Bridge:
         }
 
     # ── Bootstrap ─────────────────────────────────────────────────────
-    def run_forever(self) -> None:
-        asyncio.run(self._main())
+    def run_forever(self, install_signal_handlers: bool = False) -> None:
+        """Arranca el loop asyncio.
 
-    async def _main(self) -> None:
+        Si ``install_signal_handlers`` es True, registra SIGINT y SIGTERM
+        como señales limpias de shutdown (modo `hydra-bridge` standalone).
+        Cuando el bridge corre dentro del MCP stdio server, las señales las
+        maneja el proceso principal y no queremos tocarlas.
+        """
+        try:
+            asyncio.run(self._main(install_signal_handlers=install_signal_handlers))
+        except KeyboardInterrupt:
+            pass
+
+    async def _main(self, install_signal_handlers: bool = False) -> None:
         self._loop = asyncio.get_running_loop()
         self._outbound = asyncio.Queue()
+        self._stop = asyncio.Event()
+
+        if install_signal_handlers:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                self._loop.add_signal_handler(sig, self._stop.set)
 
         # HTTP + WebSocket
         app = web.Application()
@@ -89,13 +105,23 @@ class Bridge:
         transport, _protocol = await osc_server.create_serve_endpoint()
 
         # Fan-out de mensajes salientes → todos los clientes
+        fanout_task = asyncio.create_task(self._fanout_loop(), name="bridge-fanout")
         try:
-            while True:
-                msg = await self._outbound.get()
-                await self._broadcast(msg)
+            await self._stop.wait()
         finally:
+            fanout_task.cancel()
+            try:
+                await fanout_task
+            except (asyncio.CancelledError, Exception):
+                pass
             transport.close()
             await runner.cleanup()
+
+    async def _fanout_loop(self) -> None:
+        assert self._outbound is not None
+        while True:
+            msg = await self._outbound.get()
+            await self._broadcast(msg)
 
     # ── OSC ───────────────────────────────────────────────────────────
     def _on_osc(self, addr: str, *args: Any) -> None:
