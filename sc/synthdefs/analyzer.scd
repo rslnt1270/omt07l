@@ -56,6 +56,6 @@ SynthDef(\omtAnalyzer, { |in = 0, amp = 1.0|
     // Onset: dispara solo al detectar ataque
     SendReply.kr(onsets, '/omt/_reply/onset', [onsets]);
 }).add;
-)
 
 "omt07l · analyzer.scd cargado — Synth(\\omtAnalyzer) para arrancar".postln;
+)

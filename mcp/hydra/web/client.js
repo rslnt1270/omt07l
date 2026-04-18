@@ -36,7 +36,8 @@
   }
 
   // WebSocket
-  const wsUrl = `ws://${location.host}/ws`;
+  const wsHost = location.hostname === "0.0.0.0" ? "localhost" : location.hostname;
+  const wsUrl = `ws://${wsHost}:${location.port || 8765}/ws`;
   let ws;
   let reconnectMs = 500;
 
@@ -81,22 +82,28 @@
   function applyOsc(addr, args) {
     switch (addr) {
       case "/omt/audio/pitch":
+      case "/omt/pitch":
         window.omt.pitch = args[0] ?? 0;
         window.omt.clarity = args[1] ?? 0;
         break;
       case "/omt/audio/rms/bass":
+      case "/omt/rms/bass":
         window.omt.bass = args[0] ?? 0;
         break;
       case "/omt/audio/rms/mid":
+      case "/omt/rms/mid":
         window.omt.mid = args[0] ?? 0;
         break;
       case "/omt/audio/rms/high":
+      case "/omt/rms/high":
         window.omt.high = args[0] ?? 0;
         break;
       case "/omt/audio/onset":
+      case "/omt/onset":
         window.omt.onset = args[0] ?? 0;
         break;
       case "/omt/audio/fft/bands":
+      case "/omt/fft/bands":
         window.omt.fft = args.slice(0, 8);
         break;
       case "/omt/control/scene":

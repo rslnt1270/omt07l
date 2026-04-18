@@ -4,9 +4,9 @@
 
 (
 s.waitForBoot {
-    "sc/synthdefs/analyzer.scd".loadRelative;
+    "../synthdefs/analyzer.scd".loadRelative;
     s.sync;
-    "sc/bus/osc_routes.scd".loadRelative;
+    "../bus/osc_routes.scd".loadRelative;
     s.sync;
 
     if (~omtAnalyzer.notNil) { ~omtAnalyzer.free };
