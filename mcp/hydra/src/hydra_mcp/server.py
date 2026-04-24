@@ -34,9 +34,17 @@ def eval_hydra(code: str) -> str:
     return "enviado"
 
 
+def _safe_sketch_name(name: str) -> bool:
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return False
+    return name.replace("_", "").replace("-", "").isalnum()
+
+
 @mcp.tool()
 def load_sketch(name: str) -> str:
     """Carga un sketch de `sketches/` por nombre (sin extensión) y lo evalúa."""
+    if not _safe_sketch_name(name):
+        raise ValueError(f"nombre de sketch inválido: {name!r}")
     path = SKETCHES_DIR / f"{name}.js"
     if not path.exists():
         raise FileNotFoundError(f"sketch no encontrado: {name}")
@@ -64,3 +72,29 @@ def set_param(name: str, value: float) -> str:
 def bridge_status() -> dict:
     """Estado del WebSocket bridge: clientes conectados, último OSC recibido."""
     return _bridge().status()
+
+
+@mcp.tool()
+def send_osc(dest: str, addr: str, args: list | None = None) -> str:
+    """Envía OSC saliente al destino ``dest`` (``sc`` o ``td``).
+
+    Ejemplo: ``send_osc("sc", "/omt/control/param", ["gain", 0.8])``
+    """
+    _bridge().send_osc(dest, addr, args or [])
+    return f"osc → {dest} {addr} {args or []}"
+
+
+@mcp.tool()
+def set_scene(name: str, dest: str = "both") -> str:
+    """Dispara ``/omt/control/scene`` hacia SC, TD, o ambos.
+
+    ``dest`` puede ser ``sc``, ``td`` o ``both`` (default). Paridad con el
+    botón de escena del panel web.
+    """
+    bridge = _bridge()
+    targets = {"sc", "td"} if dest == "both" else {dest}
+    if not targets.issubset({"sc", "td"}):
+        raise ValueError(f"dest inválido: {dest!r}")
+    for t in targets:
+        bridge.send_osc(t, "/omt/control/scene", [name])
+    return f"scene '{name}' → {sorted(targets)}"

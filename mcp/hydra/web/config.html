@@ -77,20 +77,24 @@ function useLiveBus() {
     lastOscAt: -999,
   }));
 
+  const wsRef = React.useRef(null);
+
   // WebSocket real — mismo patrón que client.js
   React.useEffect(() => {
     const wsHost = location.hostname === '0.0.0.0' ? 'localhost' : location.hostname;
     const wsUrl = `ws://${wsHost}:${location.port || 8765}/ws`;
-    let ws, retryMs = 500, closed = false;
+    let retryMs = 500, closed = false;
 
     const connect = () => {
       if (closed) return;
-      ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
       ws.onopen = () => {
         retryMs = 500;
         setState((s) => ({ ...s, wsOpen: true, mcp: { ...s.mcp, hydra: 'running' } }));
       };
       ws.onclose = () => {
+        if (wsRef.current === ws) wsRef.current = null;
         setState((s) => ({ ...s, wsOpen: false, mcp: { ...s.mcp, hydra: 'connecting' } }));
         if (!closed) setTimeout(connect, retryMs);
         retryMs = Math.min(retryMs * 2, 5000);
@@ -103,7 +107,28 @@ function useLiveBus() {
       };
     };
     connect();
-    return () => { closed = true; ws && ws.close(); };
+    return () => { closed = true; wsRef.current && wsRef.current.close(); };
+  }, []);
+
+  // Emisores expuestos al resto de la UI. El WS se reabre automáticamente;
+  // si está caído, simplemente loguea en el tape como mensaje "local".
+  const sendOsc = React.useCallback((dest, addr, args = []) => {
+    const ws = wsRef.current;
+    const payload = { op: 'osc_out', dest, addr, args };
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
+    setState((s) => ({
+      ...s,
+      messages: [{ t: s.t, addr, args, src: dest }, ...s.messages].slice(0, 200),
+    }));
+  }, []);
+
+  const loadSketch = React.useCallback((name) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ op: 'load_sketch', name }));
+    }
   }, []);
 
   // Loop de animación: avanza tiempo, anima FFT suavemente, y sintetiza datos
@@ -183,7 +208,7 @@ function useLiveBus() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return state;
+  return { ...state, sendOsc, loadSketch };
 }
 
 function applyOsc(s, addr, args) {
@@ -276,6 +301,8 @@ function V4Hybrid() {
   const [sketch, setSketch] = React.useState('cardioid_breath');
   const [synthDef, setSynthDef] = React.useState('analyzer');
   const [editingPort, setEditingPort] = React.useState(null);
+  const [scene, setScene] = React.useState(2);
+  const [doctor, setDoctor] = React.useState(null);
   const [ports, setPorts] = React.useState({
     scsynth: 57110, sclang: 57120, hydraIn: 57200, hydraWs: 8765, tdIn: 7000,
   });
@@ -370,8 +397,18 @@ function V4Hybrid() {
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <button style={{ background: 'transparent', color: dim, border: `1px solid ${stroke}`,
-            padding: '6px 12px', fontFamily: mono, fontSize: 11, cursor: 'pointer', borderRadius: 3 }}>/doctor</button>
+          <button onClick={async () => {
+              setDoctor({ loading: true });
+              try {
+                const r = await fetch('/api/doctor');
+                setDoctor(await r.json());
+              } catch (e) {
+                setDoctor({ ok: false, error: String(e) });
+              }
+            }} style={{ background: 'transparent', color: dim, border: `1px solid ${stroke}`,
+              padding: '6px 12px', fontFamily: mono, fontSize: 11, cursor: 'pointer', borderRadius: 3 }}>
+            {doctor?.loading ? '…' : '/doctor'}
+          </button>
           <button style={{ background: live.wsOpen ? primary : '#884422', color: '#1a0e06', border: 'none',
             padding: '6px 14px', fontFamily: display, fontSize: 11, cursor: 'pointer', fontWeight: 600,
             letterSpacing: 1, borderRadius: 3, boxShadow: live.wsOpen ? `0 0 12px ${primaryGlow}` : 'none' }}>
@@ -421,7 +458,7 @@ function V4Hybrid() {
             {['cardioid_breath','escape_rings','metaball_orbit','morph_blob','iterate_bloom','mandelbrot_voice','voronoi_cells'].map((s) => {
               const active = s === sketch;
               return (
-                <div key={s} onClick={() => setSketch(s)} style={{
+                <div key={s} onClick={() => { setSketch(s); live.loadSketch(s); }} style={{
                   padding: '6px 8px', cursor: 'pointer',
                   background: active ? 'rgba(255,138,58,0.08)' : 'transparent',
                   borderLeft: `2px solid ${active ? primary : 'transparent'}`,
@@ -614,18 +651,26 @@ function V4Hybrid() {
               </svg>
             </div>
             <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 4 }}>
-              {[1,2,3,4].map((n) => (
-                <div key={n} style={{
-                  aspectRatio: '1', borderRadius: 3,
-                  background: n === 2 ? primary : cardHi,
-                  border: `1px solid ${n === 2 ? primary : stroke}`,
-                  color: n === 2 ? '#1a0e06' : fg,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontFamily: mono, fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                }}>
-                  S{n}
-                </div>
-              ))}
+              {[1,2,3,4].map((n) => {
+                const active = n === scene;
+                return (
+                  <div key={n} onClick={() => {
+                    setScene(n);
+                    live.sendOsc('sc', '/omt/control/scene', [`s${n}`]);
+                    live.sendOsc('td', '/omt/control/scene', [`s${n}`]);
+                  }} style={{
+                    aspectRatio: '1', borderRadius: 3,
+                    background: active ? primary : cardHi,
+                    border: `1px solid ${active ? primary : stroke}`,
+                    color: active ? '#1a0e06' : fg,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontFamily: mono, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                    boxShadow: active ? `0 0 10px ${primaryGlow}` : 'none',
+                  }}>
+                    S{n}
+                  </div>
+                );
+              })}
             </div>
           </V4Card>
 
@@ -651,6 +696,35 @@ function V4Hybrid() {
           </V4Card>
         </div>
       </div>
+
+      {/* Doctor overlay */}
+      {doctor && !doctor.loading && (
+        <div onClick={() => setDoctor(null)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 40, zIndex: 100, cursor: 'pointer',
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background: card, border: `1px solid ${strokeHi}`, borderRadius: 6,
+            padding: 18, maxWidth: '80vw', maxHeight: '80vh',
+            display: 'flex', flexDirection: 'column', gap: 10, cursor: 'default',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+              <div style={{ fontFamily: serif, fontSize: 18, fontStyle: 'italic', color: fg }}>
+                /doctor · {doctor.ok ? <span style={{ color: primary }}>OK</span> : <span style={{ color: '#ff6040' }}>FAIL</span>}
+              </div>
+              <button onClick={() => setDoctor(null)} style={{
+                background: 'transparent', border: `1px solid ${stroke}`, color: dim,
+                padding: '4px 10px', fontFamily: mono, fontSize: 10, cursor: 'pointer', borderRadius: 3 }}>close</button>
+            </div>
+            <pre style={{
+              margin: 0, fontFamily: mono, fontSize: 11, color: fg, background: bg,
+              padding: 12, borderRadius: 3, overflow: 'auto',
+              maxHeight: '60vh', whiteSpace: 'pre-wrap',
+            }}>{doctor.output || doctor.error || '(sin salida)'}</pre>
+          </div>
+        </div>
+      )}
 
       {/* Bottom logs strip */}
       <div style={{

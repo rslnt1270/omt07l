@@ -16,7 +16,7 @@ from .ws_bridge import Bridge, BridgeConfig
 
 
 def main() -> None:
-    cfg = BridgeConfig()
+    cfg = BridgeConfig.from_yaml()
     bridge = Bridge(cfg)
 
     t = threading.Thread(target=bridge.run_forever, name="hydra-ws-bridge", daemon=True)
@@ -27,7 +27,7 @@ def main() -> None:
 
 
 def bridge_only() -> None:
-    Bridge(BridgeConfig()).run_forever(install_signal_handlers=True)
+    Bridge(BridgeConfig.from_yaml()).run_forever(install_signal_handlers=True)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ s.waitForBoot {
     s.sync;
     "../bus/osc_routes.scd".loadRelative;
     s.sync;
+    "../bus/control_routes.scd".loadRelative;
+    s.sync;
 
     if (~omtAnalyzer.notNil) { ~omtAnalyzer.free };
     ~omtAnalyzer = Synth(\omtAnalyzer, [\in, 0, \amp, 1.0]);
