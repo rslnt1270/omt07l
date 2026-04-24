@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<title>omt07l · config</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  html,body{margin:0;padding:0;background:#0a0807;min-height:100vh;}
+  body{font-family:'Space Grotesk',-apple-system,system-ui,sans-serif;color:#f0d9b8;}
+  #root{min-height:100vh;display:flex;}
+  #root > * {flex:1;}
+  ::-webkit-scrollbar{width:6px;height:6px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:rgba(255,138,58,0.2);border-radius:3px;}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,138,58,0.4);}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel" data-presets="react">
+// -----------------------------------------------------------------------------
+// useLiveBus — fuente unificada de datos para la ventana.
+// Se conecta al /ws del hydra-bridge y escucha OSC real. Si no hay conexión o
+// no llegan datos en >2s, cae a una simulación idéntica a la del diseño para
+// que el panel no se vea "muerto".
+// -----------------------------------------------------------------------------
+
+const LOG_LINES = {
+  sc: [
+    '[scsynth] booting on port 57110',
+    '[scsynth] JackDriver: max output latency 2.9 ms',
+    'SynthDef "analyzer" added',
+    'SynthDef "tartini_track" added',
+    'OSCdef(\\analyzer) installed on /omt/*',
+    '[sc] peak -12.4 dB · rms -23.1 dB',
+    '[sc] tartini lock → 147.3 Hz clarity 0.92',
+    '[sc] onset detected dB=+6.2',
+  ],
+  hydra: [
+    '[hydra-bridge] listening ws://0.0.0.0:8765',
+    '[hydra-bridge] osc-in bound 0.0.0.0:57200',
+    '[hydra] client connected',
+    '[hydra] sketch loaded',
+    '[hydra] window.omt.bass bridged',
+    '[hydra] frame 2840 @ 60.0 fps',
+  ],
+  td: [
+    '[td] webserver listening :9981',
+    '[td] osc-in listening :7000',
+    '[td] project "omt07l_live.toe" loaded',
+    '[td] NDI source → "omt07l / main"',
+    '[td] projector calib: 1920×1080 @ 60',
+    '[td] perspective warp committed',
+  ],
+};
+
+function useLiveBus() {
+  const [state, setState] = React.useState(() => ({
+    t: 0,
+    bass: 0.2, mid: 0.3, high: 0.15,
+    pitch: 146.8, clarity: 0.72, onset: 0.0,
+    fft: Array.from({length: 8}, () => 0.2 + Math.random() * 0.3),
+    peak: -14, rms: -23,
+    messages: [],
+    logs: seedInitialLogs(),
+    mcp: { sc: 'connecting', hydra: 'connecting', td: 'connecting' },
+    lastOnsetAt: -999,
+    wsOpen: false,
+    lastOscAt: -999,
+  }));
+
+  // WebSocket real — mismo patrón que client.js
+  React.useEffect(() => {
+    const wsHost = location.hostname === '0.0.0.0' ? 'localhost' : location.hostname;
+    const wsUrl = `ws://${wsHost}:${location.port || 8765}/ws`;
+    let ws, retryMs = 500, closed = false;
+
+    const connect = () => {
+      if (closed) return;
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        retryMs = 500;
+        setState((s) => ({ ...s, wsOpen: true, mcp: { ...s.mcp, hydra: 'running' } }));
+      };
+      ws.onclose = () => {
+        setState((s) => ({ ...s, wsOpen: false, mcp: { ...s.mcp, hydra: 'connecting' } }));
+        if (!closed) setTimeout(connect, retryMs);
+        retryMs = Math.min(retryMs * 2, 5000);
+      };
+      ws.onerror = () => ws.close();
+      ws.onmessage = (ev) => {
+        let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+        if (msg.op !== 'osc') return;
+        setState((s) => applyOsc(s, msg.addr, msg.args));
+      };
+    };
+    connect();
+    return () => { closed = true; ws && ws.close(); };
+  }, []);
+
+  // Loop de animación: avanza tiempo, anima FFT suavemente, y sintetiza datos
+  // cuando no llega nada por OSC (fallback demo).
+  React.useEffect(() => {
+    let raf, last = performance.now(), tick = 0;
+    const loop = (now) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      tick++;
+      setState((s) => {
+        const t = s.t + dt;
+        const stale = !s.wsOpen || (t - s.lastOscAt) > 2;
+
+        let bass = s.bass, mid = s.mid, high = s.high;
+        let pitch = s.pitch, clarity = s.clarity, onset = s.onset;
+        let fft = s.fft;
+        let lastOnsetAt = s.lastOnsetAt;
+        const messages = s.messages.slice();
+        const logs = s.logs;
+        let newLogs = logs;
+
+        if (stale) {
+          const env = (f, p) => 0.5 + 0.5 * Math.sin(t * f + p);
+          const breath = env(0.37, 0) * env(1.9, 1.2);
+          bass = Math.min(1, 0.15 + 0.75 * breath * env(2.2, 0.3));
+          mid  = Math.min(1, 0.1  + 0.6 * env(3.1, 2.1) * env(0.8, 0.5));
+          high = Math.min(1, 0.08 + 0.7 * env(5.7, 0.7) * env(0.45, 1.9));
+          const pitchTarget = 120 + 80 * env(0.23, 0) + 25 * env(1.7, 2);
+          pitch = s.pitch + (pitchTarget - s.pitch) * Math.min(1, dt * 3);
+          clarity = 0.55 + 0.4 * env(0.8, 3.1);
+          onset = Math.max(0, s.onset - dt * 3.5);
+          if (t - s.lastOnsetAt > 0.35 && Math.random() < 0.025 + 0.03 * bass) {
+            onset = 0.6 + Math.random() * 0.4;
+            lastOnsetAt = t;
+          }
+          fft = s.fft.map((v, i) => {
+            const target = Math.pow(env(1 + i * 0.6, i * 0.9), 1.6) * (1 - i * 0.05);
+            return v + (target - v) * Math.min(1, dt * 6);
+          });
+
+          // sólo poblamos tape/logs sintéticos cuando estamos en modo sim;
+          // en modo live llegan por WS.
+          if (tick % 2 === 0) messages.unshift({ t, addr: '/omt/audio/rms/bass', args: [bass.toFixed(3)], src: 'sc' });
+          if (tick % 2 === 1) messages.unshift({ t, addr: '/omt/audio/rms/mid',  args: [mid.toFixed(3)], src: 'sc' });
+          if (tick % 3 === 0) messages.unshift({ t, addr: '/omt/audio/rms/high', args: [high.toFixed(3)], src: 'sc' });
+          if (tick % 6 === 0) messages.unshift({ t, addr: '/omt/audio/pitch', args: [pitch.toFixed(1), clarity.toFixed(2)], src: 'sc' });
+          if (tick % 10 === 0) messages.unshift({ t, addr: '/omt/audio/fft/bands', args: fft.map((v) => v.toFixed(2)), src: 'sc' });
+          if (onset > 0.5 && s.onset <= 0.5) messages.unshift({ t, addr: '/omt/audio/onset', args: [onset.toFixed(2)], src: 'sc' });
+          if (tick % 50 === 0) {
+            const pickSrc = ['sc', 'hydra', 'td'][Math.floor(Math.random() * 3)];
+            const pool = LOG_LINES[pickSrc];
+            const line = { t, line: pool[Math.floor(Math.random() * pool.length)] };
+            newLogs = { ...logs, [pickSrc]: [...logs[pickSrc], line].slice(-80) };
+          }
+          messages.splice(200);
+        } else {
+          // modo live: sólo decae el onset; el resto viene por WS.
+          onset = Math.max(0, s.onset - dt * 3.5);
+        }
+
+        const peak = -24 + 20 * Math.max(bass, mid, high);
+        const rms  = -32 + 14 * (bass * 0.4 + mid * 0.35 + high * 0.25);
+
+        // mcp.sc: si recibimos OSC en <2s es running; si hay ws pero no OSC, connecting.
+        const scStatus = (t - s.lastOscAt < 2) ? 'running' : (s.wsOpen ? 'connecting' : 'connecting');
+        const mcp = { ...s.mcp, sc: scStatus };
+
+        return {
+          ...s, t, bass, mid, high, pitch, clarity, onset, fft, peak, rms,
+          messages, logs: newLogs, mcp, lastOnsetAt,
+        };
+      });
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return state;
+}
+
+function applyOsc(s, addr, args) {
+  const t = s.t;
+  const next = { ...s, lastOscAt: t };
+  const a0 = args[0];
+  switch (addr) {
+    case '/omt/audio/pitch':
+    case '/omt/pitch':
+      next.pitch = Number(a0) || s.pitch;
+      next.clarity = Number(args[1]) || s.clarity;
+      break;
+    case '/omt/audio/rms/bass':
+    case '/omt/rms/bass':
+    case '/omt/bass':
+      next.bass = Math.max(0, Math.min(1, Number(a0) || 0));
+      break;
+    case '/omt/audio/rms/mid':
+    case '/omt/rms/mid':
+    case '/omt/mid':
+      next.mid = Math.max(0, Math.min(1, Number(a0) || 0));
+      break;
+    case '/omt/audio/rms/high':
+    case '/omt/rms/high':
+    case '/omt/high':
+      next.high = Math.max(0, Math.min(1, Number(a0) || 0));
+      break;
+    case '/omt/audio/onset':
+    case '/omt/onset':
+      next.onset = Number(a0) || 0;
+      next.lastOnsetAt = t;
+      break;
+    case '/omt/audio/fft/bands':
+    case '/omt/fft/bands':
+    case '/omt/fft':
+      if (Array.isArray(args) && args.length >= 8) {
+        next.fft = args.slice(0, 8).map(Number);
+      }
+      break;
+    default: break;
+  }
+  const src = addr.startsWith('/hydra') ? 'hydra' : addr.startsWith('/td') ? 'td' : 'sc';
+  next.messages = [{ t, addr, args, src }, ...s.messages].slice(0, 200);
+  return next;
+}
+
+function seedInitialLogs() {
+  const out = { sc: [], hydra: [], td: [] };
+  let t0 = -6;
+  for (const k of ['sc', 'hydra', 'td']) {
+    LOG_LINES[k].slice(0, 4).forEach((line) => {
+      out[k].push({ t: t0, line });
+      t0 += 0.3;
+    });
+  }
+  return out;
+}
+
+function pitchToNote(hz) {
+  if (!hz || hz < 20) return '—';
+  const notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const n = Math.round(12 * Math.log2(hz / 440)) + 69;
+  return notes[((n % 12) + 12) % 12] + (Math.floor(n / 12) - 1);
+}
+
+// -----------------------------------------------------------------------------
+// V4Hybrid — la vista principal. Port directo del diseño, adaptado a que crezca
+// al 100% del viewport en lugar de vivir dentro de un artboard fijo.
+// -----------------------------------------------------------------------------
+
+const bg = '#0d0907';
+const bg2 = '#1a110c';
+const card = '#1f140e';
+const cardHi = '#2a1a11';
+const stroke = 'rgba(255,138,58,0.12)';
+const strokeHi = 'rgba(255,138,58,0.3)';
+const dim = '#8a6a4e';
+const dim2 = '#5a4028';
+const fg = '#f0d9b8';
+const primary = '#ff8a3a';
+const primaryHot = '#ffb060';
+const primaryGlow = 'rgba(255,138,58,.35)';
+const serif = '"Instrument Serif", "Cormorant Garamond", Georgia, serif';
+const display = '"Space Grotesk", "Inter", system-ui, sans-serif';
+const mono = '"JetBrains Mono", ui-monospace, Menlo, monospace';
+
+function V4Hybrid() {
+  const live = useLiveBus();
+  const [device, setDevice] = React.useState('Focusrite 2i2');
+  const [sketch, setSketch] = React.useState('cardioid_breath');
+  const [synthDef, setSynthDef] = React.useState('analyzer');
+  const [editingPort, setEditingPort] = React.useState(null);
+  const [ports, setPorts] = React.useState({
+    scsynth: 57110, sclang: 57120, hydraIn: 57200, hydraWs: 8765, tdIn: 7000,
+  });
+
+  const waveRef = React.useRef([]);
+  if (waveRef.current.length === 0) waveRef.current = Array.from({length: 120}, () => 0);
+  const mix = live.bass * 0.5 + live.mid * 0.3 + live.high * 0.2;
+  React.useEffect(() => { waveRef.current = [...waveRef.current.slice(1), mix]; });
+
+  const mcps = [
+    { key: 'sc',    name: 'SuperCollider', status: live.mcp.sc,    tools: 12, latency: 2.4 },
+    { key: 'hydra', name: 'Hydra',         status: live.mcp.hydra, tools: 7,  latency: 0.8 },
+    { key: 'td',    name: 'TouchDesigner', status: live.mcp.td,    tools: 9,  latency: null },
+  ];
+
+  const wavePath = React.useMemo(() => {
+    const w = waveRef.current;
+    return w.map((v, i) => `${i === 0 ? 'M' : 'L'} ${(i / (w.length - 1)) * 100} ${50 - v * 44}`).join(' ');
+  }, [live.t]);
+
+  const patch = [
+    { id: 'bass',    lit: live.bass > 0.25,    dests: [0, 1], label: 'bass' },
+    { id: 'mid',     lit: live.mid > 0.25,     dests: [0, 1], label: 'mid' },
+    { id: 'high',    lit: live.high > 0.25,    dests: [0, 1], label: 'high' },
+    { id: 'pitch',   lit: live.clarity > 0.4,  dests: [0],    label: 'pitch' },
+    { id: 'clarity', lit: live.clarity > 0.5,  dests: [0],    label: 'clar' },
+    { id: 'onset',   lit: live.onset > 0.4,    dests: [0, 1], label: 'onset' },
+    { id: 'fft',     lit: true,                dests: [0],    label: 'fft' },
+  ];
+
+  const Port = ({ name, val, role }) => (
+    <div onClick={() => setEditingPort(name)} style={{
+      display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center',
+      padding: '6px 10px', background: editingPort === name ? cardHi : 'transparent',
+      border: `1px solid ${stroke}`, borderRadius: 4, cursor: 'pointer',
+    }}>
+      <div>
+        <div style={{ fontSize: 10, color: dim, letterSpacing: 1, textTransform: 'uppercase' }}>{role}</div>
+        <div style={{ fontSize: 12, color: fg, fontFamily: mono }}>{name}</div>
+      </div>
+      {editingPort === name ? (
+        <input autoFocus defaultValue={val}
+          onBlur={(e) => { setPorts({...ports, [name]: +e.target.value || val}); setEditingPort(null); }}
+          onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+          style={{ width: 66, background: bg, border: `1px solid ${primary}`, color: primaryHot,
+            fontFamily: mono, fontSize: 14, padding: '2px 6px', outline: 'none', textAlign: 'right' }}/>
+      ) : (
+        <div style={{ fontFamily: mono, fontSize: 15, color: primaryHot, fontVariantNumeric: 'tabular-nums' }}>:{val}</div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{
+      width: '100%', minHeight: '100vh', background: bg, color: fg,
+      backgroundImage: `radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255,138,58,0.08), transparent)`,
+      fontFamily: display, display: 'flex', flexDirection: 'column',
+    }}>
+      <style>{`
+        @keyframes v4pulse { 0% { transform: scale(0.9); opacity: .7 } 100% { transform: scale(2.2); opacity: 0 } }
+        @keyframes v4flow  { 0% { stroke-dashoffset: 30 } 100% { stroke-dashoffset: 0 } }
+      `}</style>
+
+      {/* Top bar */}
+      <div style={{ display: 'flex', alignItems: 'center', padding: '14px 22px', borderBottom: `1px solid ${stroke}`, gap: 20, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <svg width="30" height="30" viewBox="0 0 30 30">
+            <circle cx="15" cy="15" r="13" fill="none" stroke={primary} strokeWidth="1"/>
+            <circle cx="15" cy="15" r="4" fill={primary}/>
+            <path d="M15 2 L15 28 M2 15 L28 15" stroke={primary} strokeWidth="0.5" opacity="0.4"/>
+          </svg>
+          <div>
+            <div style={{ fontFamily: serif, fontSize: 22, fontStyle: 'italic', letterSpacing: -0.5, color: fg, lineHeight: 1 }}>
+              omt<span style={{ color: primary }}>·</span>07l
+            </div>
+            <div style={{ fontSize: 9, color: dim, letterSpacing: 3, textTransform: 'uppercase', marginTop: 2 }}>Control surface</div>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'center', gap: 28 }}>
+          {mcps.map((m) => (
+            <div key={m.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <StatusDot status={m.status}/>
+              <div>
+                <div style={{ fontSize: 11, color: fg, fontWeight: 500, letterSpacing: 0.2 }}>{m.name}</div>
+                <div style={{ fontSize: 9, color: dim, fontFamily: mono }}>
+                  {m.status} · {m.tools} tools{m.latency != null ? ` · ${m.latency.toFixed(1)}ms` : ''}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={{ background: 'transparent', color: dim, border: `1px solid ${stroke}`,
+            padding: '6px 12px', fontFamily: mono, fontSize: 11, cursor: 'pointer', borderRadius: 3 }}>/doctor</button>
+          <button style={{ background: live.wsOpen ? primary : '#884422', color: '#1a0e06', border: 'none',
+            padding: '6px 14px', fontFamily: display, fontSize: 11, cursor: 'pointer', fontWeight: 600,
+            letterSpacing: 1, borderRadius: 3, boxShadow: live.wsOpen ? `0 0 12px ${primaryGlow}` : 'none' }}>
+            {live.wsOpen ? '● LIVE' : '● OFFLINE'}
+          </button>
+        </div>
+      </div>
+
+      {/* Main grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr 320px', gap: 14, padding: 14, flex: 1, minHeight: 0 }}>
+
+        {/* LEFT */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, overflow: 'auto' }}>
+          <V4Card title="Signal chain" subtitle="instrumento → sc">
+            <div style={{ fontSize: 10, color: dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>Input device</div>
+            <select value={device} onChange={(e) => setDevice(e.target.value)} style={{
+              width: '100%', background: bg, color: primaryHot, border: `1px solid ${strokeHi}`,
+              padding: '8px 10px', fontFamily: mono, fontSize: 12, borderRadius: 3, outline: 'none' }}>
+              {['BlackHole 2ch','Built-in Mic','Focusrite 2i2','UA Apollo','MOTU M4'].map((d) => <option key={d}>{d}</option>)}
+            </select>
+            <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <V4Stat label="SAMPLE" value="48 kHz"/>
+              <V4Stat label="BUFFER" value="128"/>
+              <V4Stat label="PEAK"   value={`${live.peak.toFixed(1)} dB`} fg={live.peak > -6 ? '#ff6040' : primaryHot}/>
+              <V4Stat label="RMS"    value={`${live.rms.toFixed(1)} dB`}/>
+            </div>
+          </V4Card>
+
+          <V4Card title="SynthDef" subtitle="sc/synthdefs/">
+            {['analyzer','tartini_track','onset_strict','chroma_12'].map((s) => {
+              const active = s === synthDef;
+              return (
+                <div key={s} onClick={() => setSynthDef(s)} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer',
+                  background: active ? 'rgba(255,138,58,0.08)' : 'transparent',
+                  borderLeft: `2px solid ${active ? primary : 'transparent'}`,
+                  borderRadius: 2, marginBottom: 2,
+                }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: active ? primary : dim2 }}/>
+                  <span style={{ fontFamily: mono, fontSize: 12, color: active ? primaryHot : fg }}>{s}.scd</span>
+                </div>
+              );
+            })}
+          </V4Card>
+
+          <V4Card title="Hydra sketch" subtitle="active">
+            {['cardioid_breath','escape_rings','metaball_orbit','morph_blob','iterate_bloom','mandelbrot_voice','voronoi_cells'].map((s) => {
+              const active = s === sketch;
+              return (
+                <div key={s} onClick={() => setSketch(s)} style={{
+                  padding: '6px 8px', cursor: 'pointer',
+                  background: active ? 'rgba(255,138,58,0.08)' : 'transparent',
+                  borderLeft: `2px solid ${active ? primary : 'transparent'}`,
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  <span style={{ fontFamily: mono, fontSize: 12, color: active ? primaryHot : fg }}>{s}.js</span>
+                  {active && <span style={{ fontSize: 9, color: primary, fontFamily: mono }}>LOADED</span>}
+                </div>
+              );
+            })}
+          </V4Card>
+        </div>
+
+        {/* CENTER */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0 }}>
+          <V4Card title="Live audio" subtitle="analyzer on /omt/audio/*" flush>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20, padding: 14 }}>
+              <div>
+                <div style={{ fontSize: 10, color: dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Mix · 2s window</div>
+                <div style={{ height: 100, background: bg, border: `1px solid ${stroke}`, borderRadius: 3, position: 'relative' }}>
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
+                    <line x1="0" y1="50" x2="100" y2="50" stroke={stroke} strokeWidth="0.3"/>
+                    <path d={wavePath} fill="none" stroke={primary} strokeWidth="0.8" vectorEffect="non-scaling-stroke"/>
+                    <path d={`${wavePath} L 100 50 L 0 50 Z`} fill={primary} fillOpacity="0.12"/>
+                  </svg>
+                  <div style={{ position: 'absolute', top: 6, right: 8, fontSize: 10, color: primaryHot, fontFamily: mono }}>
+                    {(mix * 100).toFixed(0)}%
+                  </div>
+                </div>
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {[['bass', live.bass], ['mid', live.mid], ['high', live.high]].map(([k, v]) => (
+                    <div key={k} style={{ display: 'grid', gridTemplateColumns: '38px 1fr 36px', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 10, color: dim, textTransform: 'uppercase', letterSpacing: 1 }}>{k}</span>
+                      <div style={{ height: 6, background: bg, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%', width: `${v * 100}%`,
+                          background: `linear-gradient(90deg, ${primary}, ${primaryHot})`,
+                          transition: 'width .06s linear',
+                          boxShadow: v > 0.7 ? `0 0 6px ${primaryGlow}` : 'none',
+                        }}/>
+                      </div>
+                      <span style={{ fontSize: 10, color: fg, fontFamily: mono, textAlign: 'right' }}>{v.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 10, color: dim, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Pitch · Tartini</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontFamily: serif, fontStyle: 'italic', fontSize: 36, color: primaryHot, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                    {live.pitch.toFixed(1)}
+                  </span>
+                  <span style={{ fontSize: 11, color: dim, fontFamily: mono }}>Hz</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 13, color: fg, fontFamily: mono }}>{pitchToNote(live.pitch)}</span>
+                </div>
+                <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 9, color: dim, letterSpacing: 1 }}>CLARITY</span>
+                  <div style={{ flex: 1, height: 3, background: bg, borderRadius: 2 }}>
+                    <div style={{ height: '100%', width: `${live.clarity * 100}%`, background: primary }}/>
+                  </div>
+                  <span style={{ fontSize: 10, color: fg, fontFamily: mono }}>{(live.clarity * 100).toFixed(0)}%</span>
+                </div>
+
+                <div style={{ marginTop: 12, fontSize: 10, color: dim, letterSpacing: 2, textTransform: 'uppercase' }}>FFT · 8 bands</div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 54, marginTop: 4 }}>
+                  {live.fft.map((v, i) => (
+                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'stretch', justifyContent: 'flex-end', gap: 2, height: '100%' }}>
+                      <div style={{
+                        height: `${Math.max(5, v * 100)}%`,
+                        background: `linear-gradient(180deg, ${primaryHot}, ${primary} 60%, rgba(255,138,58,0.3))`,
+                        borderRadius: 1,
+                        boxShadow: v > 0.6 ? `0 0 6px ${primaryGlow}` : 'none',
+                      }}/>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{
+                  marginTop: 12, display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '6px 10px',
+                  background: live.onset > 0.5 ? 'rgba(255,138,58,0.15)' : bg,
+                  border: `1px solid ${live.onset > 0.5 ? primary : stroke}`,
+                  borderRadius: 3, transition: 'all .08s',
+                }}>
+                  <span style={{ fontSize: 10, color: dim, letterSpacing: 1 }}>ONSET</span>
+                  <div style={{ flex: 1, height: 2, background: bg2 }}>
+                    <div style={{ height: '100%', width: `${live.onset * 100}%`, background: primaryHot }}/>
+                  </div>
+                  <span style={{ fontSize: 10, color: live.onset > 0.5 ? primaryHot : dim, fontFamily: mono }}>{live.onset.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          </V4Card>
+
+          {/* OSC bus — patch-bay strip + flow + table */}
+          <V4Card title="OSC bus" subtitle="config/osc_map.yaml · patch + flow" flush flex>
+            <div style={{ padding: 14, position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <V4PatchBay patch={patch} t={live.t}/>
+
+              <div style={{ position: 'relative', height: 84 }}>
+                <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 400 84" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="v4flowA" x1="0" x2="1">
+                      <stop offset="0" stopColor={primary} stopOpacity="0.2"/>
+                      <stop offset="1" stopColor={primary} stopOpacity="0.8"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M 70 42 C 180 42 180 18 330 18" stroke="url(#v4flowA)" strokeWidth="1.5" fill="none" strokeDasharray="4 2"
+                    style={{ animation: 'v4flow 1.5s linear infinite' }}/>
+                  <path d="M 70 42 C 180 42 180 66 330 66" stroke="url(#v4flowA)" strokeWidth="1.5" fill="none" strokeDasharray="4 2"
+                    style={{ animation: 'v4flow 1.5s linear infinite' }}/>
+                  {live.messages.slice(0, 4).map((m, i) => {
+                    const goTd = String(m.addr).startsWith('/td');
+                    const tt = ((live.t * 60) % 100) / 100;
+                    const x = 70 + (330 - 70) * ((tt + i * 0.25) % 1);
+                    const y = 42 + (goTd ? 24 : -24) * Math.min(1, Math.abs(x - 70) / (330 - 70));
+                    return <circle key={i} cx={x} cy={y} r="2.2" fill={primaryHot}/>;
+                  })}
+                </svg>
+                <V4Node posLeft={0} top={14} label="SuperCollider" sub=":57120"/>
+                <V4Node posRight top={-6} label="Hydra"         sub="ws:8765"/>
+                <V4Node posRight top={44} label="TouchDesigner" sub=":7000"/>
+              </div>
+
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 44px 1fr 70px', gap: 8,
+                  fontSize: 9, color: dim, letterSpacing: 1, textTransform: 'uppercase',
+                  padding: '4px 6px', borderBottom: `1px solid ${stroke}` }}>
+                  <span>Address</span><span>Type</span><span>Consumer</span><span style={{ textAlign: 'right' }}>Last</span>
+                </div>
+                {[
+                  ['/omt/audio/rms/bass','f','hydra · td', live.bass.toFixed(3)],
+                  ['/omt/audio/rms/mid','f','hydra · td', live.mid.toFixed(3)],
+                  ['/omt/audio/rms/high','f','hydra · td', live.high.toFixed(3)],
+                  ['/omt/audio/pitch','f,f','hydra', `${live.pitch.toFixed(1)} / ${live.clarity.toFixed(2)}`],
+                  ['/omt/audio/onset','f','hydra · td', live.onset.toFixed(2)],
+                  ['/omt/audio/fft/bands','f[8]','hydra', `[${live.fft[0].toFixed(2)},…]`],
+                  ['/omt/control/scene','s','sc · hydra · td', '—'],
+                ].map((r) => (
+                  <div key={r[0]} style={{ display: 'grid', gridTemplateColumns: '1.6fr 44px 1fr 70px', gap: 8,
+                    padding: '5px 6px', borderBottom: `1px dashed ${stroke}`, alignItems: 'center', fontSize: 11 }}>
+                    <span style={{ fontFamily: mono, color: primaryHot }}>{r[0]}</span>
+                    <span style={{ fontFamily: mono, color: dim }}>{r[1]}</span>
+                    <span style={{ color: fg }}>{r[2]}</span>
+                    <span style={{ fontFamily: mono, color: fg, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r[3]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </V4Card>
+        </div>
+
+        {/* RIGHT */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0 }}>
+          <V4Card title="Ports" subtitle="click para editar">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <Port name="scsynth" val={ports.scsynth} role="SC audio server"/>
+              <Port name="sclang"  val={ports.sclang}  role="SC lang"/>
+              <Port name="hydraIn" val={ports.hydraIn} role="Hydra OSC in"/>
+              <Port name="hydraWs" val={ports.hydraWs} role="Hydra WebSocket"/>
+              <Port name="tdIn"    val={ports.tdIn}    role="TouchDesigner in"/>
+            </div>
+          </V4Card>
+
+          <V4Card title="TouchDesigner" subtitle="proyección final">
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: fg }}>NDI output</span>
+              <span style={{ fontSize: 11, color: primary, fontFamily: mono }}>● omt07l / main</span>
+            </div>
+            <select style={{
+              width: '100%', background: bg, color: primaryHot, border: `1px solid ${strokeHi}`,
+              padding: '6px 8px', fontFamily: mono, fontSize: 11, borderRadius: 3, outline: 'none', marginBottom: 10,
+            }}>
+              <option>1920 × 1080 @ 60</option>
+              <option>3840 × 2160 @ 30</option>
+              <option>2560 × 1440 @ 60</option>
+            </select>
+            <div style={{ fontSize: 10, color: dim, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 }}>Projection warp</div>
+            <div style={{ aspectRatio: '16/9', background: bg, border: `1px solid ${stroke}`, position: 'relative', borderRadius: 2 }}>
+              {[[0,0],[1,0],[1,1],[0,1]].map(([x,y], i) => (
+                <div key={i} style={{
+                  position: 'absolute', left: `calc(${x*100}% - 5px)`, top: `calc(${y*100}% - 5px)`,
+                  width: 10, height: 10, background: primary, borderRadius: '50%',
+                  boxShadow: `0 0 8px ${primaryGlow}`,
+                }}/>
+              ))}
+              <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 100 56" preserveAspectRatio="none">
+                <rect x="1" y="1" width="98" height="54" fill="none" stroke={primary} strokeOpacity="0.3" strokeWidth="0.3" strokeDasharray="1 1"/>
+              </svg>
+            </div>
+            <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 4 }}>
+              {[1,2,3,4].map((n) => (
+                <div key={n} style={{
+                  aspectRatio: '1', borderRadius: 3,
+                  background: n === 2 ? primary : cardHi,
+                  border: `1px solid ${n === 2 ? primary : stroke}`,
+                  color: n === 2 ? '#1a0e06' : fg,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: mono, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                }}>
+                  S{n}
+                </div>
+              ))}
+            </div>
+          </V4Card>
+
+          <V4Card title="OSC tape" subtitle={`${live.messages.length} msg`} flush flex>
+            <div style={{ overflow: 'hidden', flex: 1, padding: '4px 10px' }}>
+              {live.messages.slice(0, 16).map((m, i) => (
+                <div key={`${live.messages.length - i}-${m.addr}`} style={{
+                  display: 'grid', gridTemplateColumns: '42px 38px 1fr auto', gap: 6,
+                  padding: '2px 0', fontSize: 10, fontFamily: mono, color: fg,
+                  opacity: Math.max(0.3, 1 - i * 0.05),
+                }}>
+                  <span style={{ color: dim }}>{m.t.toFixed(2)}</span>
+                  <span style={{ color: m.src === 'sc' ? primary : m.src === 'hydra' ? primaryHot : '#b8804a' }}>{m.src}</span>
+                  <span style={{ color: fg, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.addr}</span>
+                  <span style={{ color: dim }}>
+                    {Array.isArray(m.args)
+                      ? (m.args.length > 2 ? `[${m.args.length}]` : m.args.join(' '))
+                      : String(m.args)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </V4Card>
+        </div>
+      </div>
+
+      {/* Bottom logs strip */}
+      <div style={{
+        borderTop: `1px solid ${stroke}`, padding: '8px 14px', display: 'grid',
+        gridTemplateColumns: '1fr 1fr 1fr', gap: 14, background: bg2,
+        minHeight: 110, maxHeight: 110, flexShrink: 0,
+      }}>
+        {['sc','hydra','td'].map((k) => (
+          <div key={k} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <StatusDot status={live.mcp[k]}/>
+              <span style={{ fontSize: 10, color: dim, letterSpacing: 2, textTransform: 'uppercase' }}>{k} logs</span>
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', fontFamily: mono, fontSize: 10, lineHeight: 1.4 }}>
+              {(live.logs[k] || []).slice(-4).reverse().map((l, i) => (
+                <div key={i} style={{
+                  color: fg, opacity: Math.max(0.4, 1 - i * 0.15),
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  <span style={{ color: dim2 }}>[{l.t.toFixed(1)}]</span> {l.line}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatusDot({ status }) {
+  const color = status === 'running' ? primary : status === 'connecting' ? primaryHot : '#884422';
+  return (
+    <div style={{ position: 'relative', width: 10, height: 10 }}>
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: '50%', background: color,
+        boxShadow: status === 'running' ? `0 0 8px ${primaryGlow}` : 'none',
+      }}/>
+      {status === 'running' && (
+        <div style={{
+          position: 'absolute', inset: -4, borderRadius: '50%',
+          border: `1.5px solid ${color}`, animation: 'v4pulse 1.6s ease-out infinite', opacity: 0.5,
+        }}/>
+      )}
+    </div>
+  );
+}
+
+function V4Card({ title, subtitle, children, flush, flex }) {
+  return (
+    <div style={{
+      background: card, border: `1px solid ${stroke}`, borderRadius: 6, overflow: 'hidden',
+      display: 'flex', flexDirection: 'column', flex: flex ? 1 : 'none', minHeight: 0,
+    }}>
+      <div style={{
+        padding: '10px 14px 8px', display: 'flex',
+        justifyContent: 'space-between', alignItems: 'baseline',
+        borderBottom: `1px solid ${stroke}`,
+      }}>
+        <div>
+          <div style={{ fontFamily: serif, fontSize: 15, fontStyle: 'italic', color: fg, letterSpacing: -0.2 }}>{title}</div>
+          {subtitle && <div style={{ fontSize: 9, color: dim, letterSpacing: 2, textTransform: 'uppercase', marginTop: 2 }}>{subtitle}</div>}
+        </div>
+      </div>
+      {flush ? children : <div style={{ padding: 12, flex: 1, minHeight: 0, overflow: 'auto' }}>{children}</div>}
+    </div>
+  );
+}
+
+function V4Stat({ label, value, fg: fgOverride }) {
+  return (
+    <div style={{ padding: '6px 8px', background: 'rgba(0,0,0,0.2)', borderRadius: 3 }}>
+      <div style={{ fontSize: 9, color: dim, letterSpacing: 1.5 }}>{label}</div>
+      <div style={{ fontFamily: mono, fontSize: 13, color: fgOverride || fg, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+    </div>
+  );
+}
+
+function V4Node({ posLeft, posRight, top, label, sub }) {
+  const posStyle = posRight ? { right: 0, top } : { left: posLeft, top };
+  return (
+    <div style={{
+      position: 'absolute', ...posStyle, background: cardHi, border: `1px solid ${strokeHi}`,
+      borderRadius: 4, padding: '6px 10px', minWidth: 100,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ width: 5, height: 5, borderRadius: '50%', background: primary, boxShadow: `0 0 4px ${primary}` }}/>
+        <span style={{ fontSize: 11, color: fg, fontFamily: display, fontWeight: 500 }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 9, color: dim, fontFamily: mono, marginTop: 1 }}>{sub}</div>
+    </div>
+  );
+}
+
+function V4PatchBay({ patch, t }) {
+  const W = 400, H = 110;
+  const topY = 28, botY = 86;
+  const jackR = 7;
+  const destX = [120, 280];
+  const topXs = patch.map((p, i) => 40 + i * ((W - 80) / (patch.length - 1)));
+
+  return (
+    <div style={{
+      position: 'relative', background: cardHi, border: `1px solid ${stroke}`,
+      borderRadius: 4, height: H, overflow: 'hidden',
+    }}>
+      <div style={{
+        position: 'absolute', inset: 0,
+        backgroundImage: `linear-gradient(${stroke} 1px, transparent 1px)`,
+        backgroundSize: '100% 14px', opacity: 0.5, pointerEvents: 'none',
+      }}/>
+
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
+        {patch.map((p, i) => p.dests.map((d) => {
+          const x1 = topXs[i], y1 = topY + jackR;
+          const x2 = destX[d],  y2 = botY - jackR;
+          const sway = 4 * Math.sin(t * 1.2 + i * 0.5 + d * 0.8);
+          const cy = (y1 + y2) / 2 + sway;
+          const path = `M ${x1} ${y1} C ${x1} ${cy} ${x2} ${cy} ${x2} ${y2}`;
+          const lit = p.lit;
+          return (
+            <g key={`${p.id}-${d}`}>
+              {lit && <path d={path} stroke={primary} strokeOpacity="0.35" strokeWidth="5" fill="none" strokeLinecap="round"/>}
+              <path d={path} stroke={lit ? primaryHot : dim2} strokeWidth={lit ? 1.6 : 1} fill="none" strokeLinecap="round" opacity={lit ? 1 : 0.55}/>
+            </g>
+          );
+        }))}
+
+        {patch.map((p, i) => {
+          const x = topXs[i];
+          return (
+            <g key={p.id} transform={`translate(${x} ${topY})`}>
+              <circle r={jackR + 2} fill="#0a0604" stroke={strokeHi} strokeWidth="0.8"/>
+              <circle r={jackR - 1} fill="#160c08" stroke={strokeHi} strokeWidth="0.6"/>
+              <circle r="2.6" fill={p.lit ? primaryHot : '#3a241a'}
+                style={{ filter: p.lit ? `drop-shadow(0 0 4px ${primary})` : 'none' }}/>
+              <text y="-12" textAnchor="middle" fill={fg} fontSize="8" fontFamily={mono} letterSpacing="0.5" opacity="0.9">{p.label}</text>
+            </g>
+          );
+        })}
+
+        {['hydra','td'].map((name, i) => {
+          const x = destX[i];
+          const anyLit = patch.some((p) => p.dests.includes(i) && p.lit);
+          return (
+            <g key={name} transform={`translate(${x} ${botY})`}>
+              <rect x="-34" y="-2" width="68" height="20" rx="3" fill="#160c08" stroke={strokeHi} strokeWidth="0.6"/>
+              <circle r={jackR + 2} fill="#0a0604" stroke={strokeHi} strokeWidth="0.8"/>
+              <circle r={jackR - 1} fill="#160c08"/>
+              <circle r="2.6" fill={anyLit ? primaryHot : '#3a241a'}
+                style={{ filter: anyLit ? `drop-shadow(0 0 5px ${primary})` : 'none' }}/>
+              <text y="14" textAnchor="middle" fill={fg} fontSize="8" fontFamily={mono} letterSpacing="1">
+                {name === 'hydra' ? 'HYDRA IN' : 'TD IN'}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+
+      <div style={{
+        position: 'absolute', top: 2, left: 8, fontSize: 9, color: dim,
+        letterSpacing: 2, textTransform: 'uppercase', fontFamily: mono,
+      }}>SC · outs</div>
+      <div style={{
+        position: 'absolute', bottom: 2, right: 8, fontSize: 9, color: dim,
+        letterSpacing: 2, textTransform: 'uppercase', fontFamily: mono,
+      }}>patch</div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<V4Hybrid/>);
+</script>
+</body>
+</html>
