@@ -157,7 +157,12 @@ class Bridge:
 
         if install_signal_handlers:
             for sig in (signal.SIGINT, signal.SIGTERM):
-                self._loop.add_signal_handler(sig, self._stop.set)
+                try:
+                    self._loop.add_signal_handler(sig, self._stop.set)
+                except NotImplementedError:
+                    # Windows: el ProactorEventLoop no soporta add_signal_handler;
+                    # KeyboardInterrupt (Ctrl+C) ya queda capturado en run_forever.
+                    pass
 
         # HTTP + WebSocket
         app = web.Application()
