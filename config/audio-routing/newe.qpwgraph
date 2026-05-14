@@ -1,0 +1,14 @@
+<!DOCTYPE patchbay>
+<patchbay name="newe" version="1.0.0">
+ <items>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Audio Coprocessor Headset Microphone" port="Headset Microphone:capture_FR"/>
+   <input node="SuperCollider" port="SuperCollider:in_2"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Audio Coprocessor Headset Microphone" port="Headset Microphone:capture_FL"/>
+   <input node="SuperCollider" port="SuperCollider:in_1"/>
+  </item>
+ </items>
+</patchbay>
+

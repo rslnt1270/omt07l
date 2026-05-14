@@ -1,0 +1,22 @@
+<!DOCTYPE patchbay>
+<patchbay name="qpwgraph" version="1.0.0">
+ <items>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Audio Coprocessor Headset Microphone" port="Headset Microphone:capture_FL"/>
+   <input node="SuperCollider" port="SuperCollider:in_1"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Audio Coprocessor Headset Microphone" port="Headset Microphone:capture_FL"/>
+   <input node="Control de volumen de PulseAudio-2" port="Control de volumen de PulseAudio:input_FL"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Audio Coprocessor Headset Microphone" port="Headset Microphone:capture_FR"/>
+   <input node="Control de volumen de PulseAudio-2" port="Control de volumen de PulseAudio:input_FR"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Audio Coprocessor Headset Microphone" port="Headset Microphone:capture_FR"/>
+   <input node="SuperCollider" port="SuperCollider:in_2"/>
+  </item>
+ </items>
+</patchbay>
+
