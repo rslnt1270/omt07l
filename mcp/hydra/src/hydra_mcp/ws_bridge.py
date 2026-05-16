@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -180,6 +181,10 @@ class Bridge:
         )
         transport, _protocol = await osc_server.create_serve_endpoint()
 
+        # Banner de arranque: sin esto la terminal se queda en blanco y el
+        # bridge parece colgado cuando en realidad ya está sirviendo.
+        self._log_startup()
+
         # Fan-out de mensajes salientes → todos los clientes
         fanout_task = asyncio.create_task(self._fanout_loop(), name="bridge-fanout")
         try:
@@ -192,6 +197,24 @@ class Bridge:
                 pass
             transport.close()
             await runner.cleanup()
+
+    def _log_startup(self) -> None:
+        """Imprime en stderr dónde está escuchando el bridge.
+
+        El bridge corre indefinidamente sin emitir output propio; este banner
+        deja claro que arrancó bien (y no que se colgó).
+        """
+        host = "localhost" if self.cfg.ws_host in ("0.0.0.0", "127.0.0.1") else self.cfg.ws_host
+        dests = ", ".join(f"{d.name}:{d.port}" for d in self.cfg.outbound) or "(ninguno)"
+        print(
+            f"hydra-bridge listo\n"
+            f"  web/ws : http://{host}:{self.cfg.ws_port}/  (ws en /ws)\n"
+            f"  osc in : udp:{self.cfg.osc_host}:{self.cfg.osc_port}\n"
+            f"  osc out: {dests}\n"
+            f"  Ctrl-C para salir.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     async def _fanout_loop(self) -> None:
         assert self._outbound is not None
