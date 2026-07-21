@@ -31,6 +31,13 @@ dist/
 # Claude Code (solo local, no compartir permisos por máquina)
 .claude/settings.local.json
 
+# Graphify (grafo derivado del código — nunca al repo)
+graphify-out/
+.graphify_analysis.json
+.graphify_labels.json
+.graphify_labels.json.sig
+.graphify_root
+
 # R (entorno local)
 .Rhistory
 .Rapp.history
